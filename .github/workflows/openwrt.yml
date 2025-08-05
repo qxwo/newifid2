@@ -29,17 +29,22 @@ jobs:
           sudo -E apt-get -yqq install build-essential asciidoc binutils bzip2 lib32gcc-s1 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get clean
-      - name: Check disk space after initialization
-        run: df -h
+
+      - name: Clear runner logs
+        run: |
+          sudo truncate -s 0 /home/runner/actions-runner/cached/_diag/*.log
+          df -h
 
       - name: Download lede
         run: |
           git clone --depth 1 https://github.com/coolsnowwolf/lede
           cp .config ./lede/.config
           mv ./lede/* ./
+
       - name: Install Helloword
         run: |
           echo "src-git helloworld https://github.com/fw876/helloworld" >> ./feeds.conf.default 
+
       - name: Install OpenClash
         run: |
           mkdir package/luci-app-openclash
@@ -53,36 +58,42 @@ jobs:
           pushd luci-app-openclash/tools/po2lmo
           make && sudo make install
           popd
+
       - name: Update feeds
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-      - name: Costom configure file
+          ./scripts/feeds update -a || { echo "Feeds update failed"; exit 1; }
+          ./scripts/feeds install -a || { echo "Feeds install failed"; exit 1; }
+
+      - name: Custom configure file
         run: |
           make defconfig
+          if [ ! -f .config ]; then echo "Config file missing"; exit 1; fi
+
       - name: Download package source code
         run: |
-          make download -j8
+          for i in {1..3}; do make download -j8 && break || { echo "Retry $i failed"; sleep 5; }; done
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
+
       - name: Clean up disk space before compile
         run: |
           df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
           sudo apt-get clean
-          rm -rf dl/*.tar.gz dl/*.zip
+          sudo rm -rf dl/*.tar.gz dl/*.zip dl/*.tgz
+          find . -name "*.o" -exec rm -f {} \;
           df -h
+
       - name: Compile firmware
         run: |
-          echo -e "4 thread build."
-          make -j4 V=s
+          echo -e "1 thread build."
+          make -j1 V=s
+
       - name: Clean up after compile
         run: |
           make clean
           df -h
+
       - name: Upload artifact
         uses: actions/upload-artifact@master
         with:
